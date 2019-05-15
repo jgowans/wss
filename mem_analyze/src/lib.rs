@@ -22,29 +22,36 @@ pub struct VirtualSegment {
 
 pub struct Page {
     pub status: PageStatus,
-    pub data: Vec<u8>,
+    pub data: Option<Vec<u8>>,
 }
 
 impl Page {
     pub fn is_zero(&self) -> bool {
-        if self.data.len() == 0 {
-            return false
-        }
-        for byte in &self.data {
-            if *byte != 0 {
-                return false
+        match self.data {
+            None => return false,
+            Some(ref data) => {
+                for byte in data {
+                    if *byte != 0 {
+                        return false
+                    }
+                }
+                return true
             }
         }
-        true
     }
 
     fn repeating_64_bit_pattern(&self) -> bool {
-        for idx in 8..self.data.len() {
-            if self.data[idx] != self.data[idx-8] {
-                return false;
+        match self.data {
+            None => return false,
+            Some(ref data) => {
+                for idx in 8..data.len() {
+                    if data[idx] != data[idx-8] {
+                        return false;
+                    }
+                }
+                return true
             }
         }
-        true
     }
 }
 

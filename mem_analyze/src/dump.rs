@@ -23,7 +23,7 @@ const IDLE_BITMAP_PATH: &str = "/sys/kernel/mm/page_idle/bitmap";
 
 pub fn get_memory(pid: i32) -> Result<super::ProcessMemory, std::io::Error> {
     set_idlemap()?;
-    thread::sleep(time::Duration::from_secs(5));
+    //thread::sleep(time::Duration::from_secs(1));
     // TODO: sleep here
     let snapshot_time = Utc::now();
     let idlemap = load_idlemap()?;
@@ -38,31 +38,49 @@ pub fn get_memory(pid: i32) -> Result<super::ProcessMemory, std::io::Error> {
     let mut mapped_pages = 0;
     for segment in segments {
         let pagemap: Vec<u64> = get_pagemap(pid, &segment)?;
+        println!("Pagemap: {:x?}", pagemap);
         println!("Pagemap for segment at {} with size {} has len {}", segment.start_address, segment.size, pagemap.len());
+        //let all_page_data = get_page_content(pid, segment.start_address)?;
+        let mut data_slice: Option<Vec<u8>> = None;
+        let mut data_slice_offset = 0;
         let mut pages: Vec<super::Page> = Vec::new();
         for (page_idx, pagemap_word) in pagemap.iter().enumerate() {
             total_pages += 1;
             // Bits 0-54  page frame number (PFN) if present
             let pfn = pagemap_word & 0x7FFFFFFFFFFFFF;
             let page_status: super::PageStatus;
+            let page_data: Option<Vec<u8>>;
             if pfn == 0 {
                 page_status = super::PageStatus::Unmapped;
+                page_data = None;
             } else {
                 mapped_pages += 1;
                 if pagemap_word & 1 << 62 != 0 {
                     page_status = super::PageStatus::Swapped;
+                    page_data = None;
 
                 } else {
+                    if data_slice == None {
+                        println!("About to check page range");
+                        let page_range = contiguous_mapped_length(&pagemap[page_idx..]);
+                        data_slice_offset = 0;
+                        data_slice = Some(get_page_content(pid, segment.start_address, page_range)?);
+                        println!("Page range: {}", page_range);
+                    }
                     if idlemap[pfn as usize / 8] & 1 << pfn % 8 == 0 {
                         page_status = super::PageStatus::Active;
                     } else {
                         page_status = super::PageStatus::Idle;
                     }
+                    page_data = Some(match data_slice {
+                        None => panic!("We were supposed to pre-read this but didn't...."),
+                        Some(ref data_slice) => data_slice[(data_slice_offset* PAGE_SIZE)..((data_slice_offset+1) * PAGE_SIZE)].to_vec(),
+                    });
                 }
             }
             pages.push(super::Page {
                 status: page_status,
-                data: Vec::new(),
+                data: page_data,
             })
         }
         process_memory.segments.push(super::VirtualSegment {
@@ -76,12 +94,24 @@ pub fn get_memory(pid: i32) -> Result<super::ProcessMemory, std::io::Error> {
     Ok(process_memory)
 }
 
+fn contiguous_mapped_length(pagemap: &[u64]) -> usize {
+    let mut length = 0;
+    while length < pagemap.len() {
+        length += 1;
+        if pagemap[length] & 0x7FFFFFFFFFFFFF == 0 {
+            break;
+        }
+    }
+    length
+}
+
 struct Segment {
     pub start_address: usize,
     pub size: usize,
 }
 
 fn get_pagemap(pid: i32, segment: &Segment) -> std::io::Result<Vec<u64>> {
+    println!("Starting to get pagemap");
     assert_eq!(segment.start_address % PAGE_SIZE, 0);
     // This is why we need to run the program as root
     // https://www.kernel.org/doc/Documentation/vm/pagemap.txt
@@ -95,6 +125,7 @@ fn get_pagemap(pid: i32, segment: &Segment) -> std::io::Result<Vec<u64>> {
     let mut pagemap_words: Vec<u64> = Vec::with_capacity(pagemap.len() / 8);
     pagemap_words.resize(pagemap.len() / 8, 0);
     LittleEndian::read_u64_into(&pagemap, &mut pagemap_words);
+    println!("Finished getting pagemap");
     Ok(pagemap_words)
 }
 
@@ -141,6 +172,18 @@ fn load_idlemap() -> std::io::Result<Vec<u8>> {
     file.read_to_end(&mut idlemap)?;
     println!("After read have capacity: {} and size {}", idlemap.capacity(), idlemap.len());
     Ok(idlemap)
+}
+
+// this is fucking inefficient; we should be opening the file ones and
+// reading contiguous pages in one go.
+// but it'll do for a start....
+fn get_page_content(pid: i32, page_addr_start: usize, pages: usize) -> std::io::Result<Vec<u8>> {
+    let mut mem_file = File::open(format!("/proc/{}/mem", pid))?;
+    mem_file.seek(SeekFrom::Start(page_addr_start as u64))?;
+    let mut mem: Vec<u8> = Vec::with_capacity(pages * PAGE_SIZE);
+    mem.resize(pages * PAGE_SIZE, 0); // why do I have to do this...?
+    mem_file.read_exact(mem.as_mut_slice())?;
+    Ok(mem)
 }
 
 fn system_ram_pages() -> usize {
