@@ -25,10 +25,15 @@ pub fn page_analytics(memory: &super::ProcessMemory) {
         debug!("Segment start {:x} with size {}", segment.virtual_addr_start, segment.pages.len());
     }
     info!("Total pages: {}", total_pages);
-    info!("Unmapped pages: {}", unmapped_pages);
-    info!("Zero pages: {}", zero_pages);
-    info!("Active pages: {}", active_pages);
-    info!("Idle pages: {}", idle_pages);
-    info!("Swapped pages: {}", swapped_pages);
-    info!("Repeating 64-bit patterns : {}", repeating_64_bit_patterns);
+    log_info("Unmapped", unmapped_pages, total_pages);
+    log_info("Zero    ", zero_pages, total_pages);
+    log_info("Active  ", active_pages, total_pages);
+    log_info("Idle    ", idle_pages, total_pages);
+    log_info("Swapped ", swapped_pages, total_pages);
+    log_info("R 64bit ", repeating_64_bit_patterns, total_pages);
+
+    fn log_info(name: &str, val: u64, total: u64) {
+        info!("{}", format!("{} pages: {} = {:.0}%", name, val, 100.0 * val as f32 / total as f32));
+    }
 }
+

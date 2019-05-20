@@ -51,11 +51,9 @@ pub fn get_memory(pid: i32, sleep: u64) -> Result<super::ProcessMemory, std::io:
         let mut data_slice_offset = 0;
         let mut pages: Vec<super::Page> = Vec::new();
         for (page_idx, pagemap_word) in pagemap.iter().enumerate() {
-            // Bits 0-54  page frame number (PFN) if present
-            let pfn = pagemap_word & 0x7FFFFFFFFFFFFF;
             let page_status: super::PageStatus;
             let page_data: Option<Vec<u8>>;
-            if pfn == 0 {
+            if pagemap_word & 1 << 63 == 0 {
                 page_status = super::PageStatus::Unmapped;
                 page_data = None;
                 data_slice = None; //end of contiguous; clear for next mapped page.
@@ -70,8 +68,10 @@ pub fn get_memory(pid: i32, sleep: u64) -> Result<super::ProcessMemory, std::io:
                         let page_range = contiguous_mapped_length(&pagemap[page_idx..]);
                         assert!(page_range > 0); // debugging; remove once happy with algorithm.
                         data_slice_offset = 0;
-                        data_slice = Some(get_page_content(pid, segment.start_address, page_range)?);
+                        data_slice = Some(get_page_content(pid, segment.start_address + (page_idx * PAGE_SIZE), page_range)?);
                     }
+                    // Bits 0-54  page frame number (PFN) if present
+                    let pfn = pagemap_word & 0x7FFFFFFFFFFFFF;
                     if idlemap[pfn as usize / 8] & 1 << pfn % 8 == 0 {
                         page_status = super::PageStatus::Active;
                     } else {
@@ -102,7 +102,7 @@ pub fn get_memory(pid: i32, sleep: u64) -> Result<super::ProcessMemory, std::io:
 // returns how long the contiguous segment of resident entries is.
 fn contiguous_mapped_length(pagemap: &[u64]) -> usize {
     for (idx, entry) in pagemap.iter().enumerate() {
-        if entry & 0x7FFFFFFFFFFFFF == 0 { // TODO: update to handle swapped.
+        if entry & 1 << 63 == 0 {
             assert!(idx > 0); // we only expect this to be called when at a valid slice.
             return idx;
         }
