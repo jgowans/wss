@@ -5,6 +5,7 @@ use sysinfo::SystemExt;
 use byteorder::{ByteOrder, LittleEndian};
 use std::{thread, time};
 use chrono::Utc;
+use std::cmp::min;
 //use nix::sys::{ptrace, wait, signal};
 //use nix::unistd::Pid;
 
@@ -22,21 +23,20 @@ const PAGE_SIZE: usize = 4096;
 const IDLE_BITMAP_PATH: &str = "/sys/kernel/mm/page_idle/bitmap";
 
 const KPAGEFLAGS_PATH: &str = "/proc/kpageflags";
-const KPAGEFLAGS_BIT_BUDDY: u8 = 10;
-
 // Without a process ID means get the memory activity for the whole host.
 // Note it doesn't analyze page contents, only type and activity.
 pub fn get_host_memory(sleep: u64, inspect_ram: bool) -> Result<super::ProcessMemory, std::io::Error> {
-    set_idlemap()?;
+    let physical_segments = get_physical_segments()?;
+    set_idlemap(&physical_segments)?;
     //ptrace::cont(nix_pid, None);
     debug!("Sleeping {} seconds", sleep);
     thread::sleep(time::Duration::from_secs(sleep));
     let snapshot_time = Utc::now();
     //signal::kill(nix_pid, signal::Signal::SIGSTOP);
-    let idlemap = load_idlemap()?;
+    let idlemap = load_idlemap(&physical_segments)?;
     Ok(super::ProcessMemory {
         timestamp: snapshot_time,
-        segments: get_physical_segments()?.iter().map(|segment|
+        segments: physical_segments.iter().map(|segment|
             super::Segment {
                 addr_start: 0,
                 page_flags: get_kpageflags(segment).unwrap().into_iter().enumerate().map(|(pfn_idx, pfn_flags)| {
@@ -65,13 +65,14 @@ pub fn get_memory(pid: i32, sleep: u64) -> Result<super::ProcessMemory, std::io:
     //ptrace::attach(nix_pid);
     //wait::waitpid(nix_pid, None);
     //ptrace::detach(nix_pid);
-    set_idlemap()?;
+    let physical_segments = get_physical_segments()?;
+    set_idlemap(&physical_segments)?;
     //ptrace::cont(nix_pid, None);
     debug!("Sleeping {} seconds", sleep);
     thread::sleep(time::Duration::from_secs(sleep));
     let snapshot_time = Utc::now();
     //signal::kill(nix_pid, signal::Signal::SIGSTOP);
-    let idlemap = load_idlemap()?;
+    let idlemap = load_idlemap(&physical_segments)?;
     let segments: Vec<Segment> = get_virtual_segments(pid)?.into_iter()
         .filter(|s| s.start_address < USERSPACE_END && s.size >= SEGMENT_THRESHOLD)
         .collect();
@@ -204,7 +205,7 @@ fn parse_segment_addresses(lines: Vec<String>) -> Vec<Segment> {
         if let Ok((a, b)) = scan_fmt!(&line, "{x}-{x}", [hex usize], [hex usize]) {
             segments.push(Segment {
                 start_address: a,
-                size: b - a,
+                size: b - a + 1,
             })
         } else {
             error!("Unable to parse maps line: {}", line);
@@ -213,34 +214,45 @@ fn parse_segment_addresses(lines: Vec<String>) -> Vec<Segment> {
     return segments;
 }
 
-fn set_idlemap() -> std::io::Result<()> {
+fn set_idlemap(physical_segments: &[Segment]) -> std::io::Result<()> {
+    // segment size = 8 * bytes-written * PAGE_SIZE
     let start_time = Utc::now();
-    let idle_bitmap_data: Vec<u8> = vec![0xff; 4096];
-    let mut file = File::create(IDLE_BITMAP_PATH)?;
-    let mut write_counter: usize = 0;
-    loop {
-        match file.write(&idle_bitmap_data) {
-            Ok(wrote) => write_counter += wrote,
-            Err(_e) => break,
+    for segment in physical_segments {
+        let idle_bitmap_data: Vec<u8> = vec![0xff; 4096];
+        let mut file = File::create(IDLE_BITMAP_PATH)?;
+        // extra divide and multiple to round down to starting 8-byte boundary.
+        file.seek(SeekFrom::Start(((((segment.start_address / PAGE_SIZE) / 8) / 8 ) * 8) as u64))?;
+        let mut write_counter: usize = 0;
+        let bytes_to_write: usize = ((segment.size / PAGE_SIZE) + 8 - 1) / 8;
+        while write_counter < bytes_to_write  {
+            // is there a better way to round up to closest multiple of 8?
+            let to_write = ((min(idle_bitmap_data.len(), bytes_to_write - write_counter) - 1) | 0x7) + 1;
+            write_counter += file.write(&idle_bitmap_data[0..to_write])?;
         }
-    }
-    if write_counter * 8 < system_ram_pages() {
-        error!("Fatal: unable to set sufficient idlemap pages. Only set {} bytes", write_counter);
-        std::process::exit(1);
     }
     debug!("Idlemap set in {} ms", (Utc::now() - start_time).num_milliseconds());
     Ok(())
 }
 
-fn load_idlemap() -> std::io::Result<Vec<u8>> {
+// There are fewer idlemap bytes than the vector. Rather than some sparse vector data
+// structure I'll create a larger vector and keep the rest of the bits as 0.
+// It's a bit (10%?) wasteful but keeps the logic simpler.
+fn load_idlemap(physical_segments: &[Segment]) -> std::io::Result<Vec<u8>> {
     let start_time = Utc::now();
-    // kinda weird, but what we're doing here is 8-bits per page, but actually dividing by 7
-    // to have the capacity a bit bigger, seeing as we seem to fill about 1.1 times the number
-    // of idlemap bits as we have physical pages.
-    let mut idlemap: Vec<u8> = Vec::with_capacity(system_ram_pages() / 7);
+    let idlemap_size = (physical_segments.last().unwrap().start_address + physical_segments.last().unwrap().size + 1) / (PAGE_SIZE * 8);
+    let mut idlemap: Vec<u8> = Vec::with_capacity(idlemap_size);
+    idlemap.resize(idlemap_size, 0);
     let mut file = File::open(IDLE_BITMAP_PATH)?;
-    file.read_to_end(&mut idlemap)?;
-    debug!("Idlemap loaded in {} ms", (Utc::now() - start_time).num_milliseconds());
+    let mut read_counter = 0;
+    for segment in physical_segments {
+        let offset = (((segment.start_address / PAGE_SIZE) / 8) / 8 ) * 8;
+        let bytes = ((segment.size/ PAGE_SIZE) + 8 - 1) / 8;
+        let to_read = ((bytes - 1) | 0x7) + 1;
+        file.seek(SeekFrom::Start(offset as u64))?;
+        file.read_exact(&mut idlemap[offset..(offset+to_read)])?;
+        read_counter += to_read;
+    }
+    debug!("Idlemap of {} bytes loaded to vec with size {} in {} ms", read_counter, idlemap.len(), (Utc::now() - start_time).num_milliseconds());
     Ok(idlemap)
 }
 
