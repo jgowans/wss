@@ -20,7 +20,7 @@ use rusoto_s3::S3Client;
 use rusoto_s3::S3;
 use rusoto_s3::PutObjectRequest;
 
-pub fn write_process_memory(pid: i32, region: &str, memory: &super::ProcessMemory) -> std::io::Result<()> {
+pub fn write_process_memory(pid: i32, region: &str, memory: &super::ProcessMemory, s3_persist: bool) -> std::io::Result<()> {
     let base_dir = format!("/tmp/wss/{}/{}", pid, memory.timestamp.to_rfc3339_opts(SecondsFormat::Secs, true));
     fs::create_dir_all(&base_dir)?;
 
@@ -31,9 +31,11 @@ pub fn write_process_memory(pid: i32, region: &str, memory: &super::ProcessMemor
 
     for (segment_start, segment_data) in process_to_page_summary(&memory).into_iter() {
         write_to_file(&base_dir, segment_start, &segment_data)?;
-        write_to_s3(region,
-                    &format!("{}/{}", hostname, memory.timestamp.to_rfc3339_opts(SecondsFormat::Secs, true)),
-                    segment_start, segment_data);
+        if s3_persist {
+            write_to_s3(region,
+                        &format!("{}/{}", hostname, memory.timestamp.to_rfc3339_opts(SecondsFormat::Secs, true)),
+                        segment_start, segment_data);
+        }
     }
     Ok(())
 }

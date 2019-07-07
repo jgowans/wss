@@ -38,6 +38,9 @@ fn main() -> std::io::Result<()> {
              .short("i")
              .long("inspect-ram")
              .multiple(true))
+        .arg(Arg::with_name("s3-persist")
+             .long("s3")
+             .multiple(true))
         .get_matches();
 
     let region: String = match matches.value_of("region") {
@@ -54,13 +57,14 @@ fn main() -> std::io::Result<()> {
     };
 
     let inspect_ram: bool = matches.is_present("inspect-ram");
+    let s3_persist: bool = matches.is_present("s3-persist");
 
     if pids.len() > 0 {
         info!("PID supplied: {:?}\n", pids);
         loop {
             let start_time = Utc::now();
             let process_memory = mem_analyze::dump::get_memory(pids[0], SLEEP_TIME)?;
-            mem_analyze::persist::write_process_memory(pids[0], &region, &process_memory)?;
+            mem_analyze::persist::write_process_memory(pids[0], &region, &process_memory, s3_persist)?;
             mem_analyze::statistics::page_analytics(&process_memory);
             info!("---------- Completed analysis in in {} ms ----------",
                   (Utc::now() - start_time).num_milliseconds());
@@ -70,7 +74,7 @@ fn main() -> std::io::Result<()> {
         loop {
             let start_time = Utc::now();
             let process_memory = mem_analyze::dump::get_host_memory(SLEEP_TIME, inspect_ram)?;
-            mem_analyze::persist::write_process_memory(0, &region, &process_memory)?;
+            mem_analyze::persist::write_process_memory(0, &region, &process_memory, s3_persist)?;
             mem_analyze::statistics::page_analytics(&process_memory);
             info!("---------- Completed analysis in in {} ms ----------",
                   (Utc::now() - start_time).num_milliseconds());
