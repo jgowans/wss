@@ -183,10 +183,24 @@ fn read_segment_data_from_file(segment: &Segment, file_path: &str) -> std::io::R
 }
 
 fn get_virtual_segments(pid: i32) -> Result<Vec<Segment>, io::Error> {
-    let mut segments: Vec<Segment> = Vec::new();
     let file = File::open(format!("/proc/{}/maps", pid))?;
-    for line in BufReader::new(file).lines() {
-        let line = line?;
+    Ok(parse_segment_addresses(
+            BufReader::new(file).lines()
+            .map(|line| line.unwrap()).collect()))
+}
+
+fn get_physical_segments() -> Result<Vec<Segment>, io::Error> {
+    let file = File::open("/proc/iomem")?;
+    Ok(parse_segment_addresses(
+            BufReader::new(file).lines()
+            .map(|line| line.unwrap())
+            .filter(|line| line.contains("System RAM"))
+            .collect()))
+}
+
+fn parse_segment_addresses(lines: Vec<String>) -> Vec<Segment> {
+    let mut segments: Vec<Segment> = Vec::new();
+    for line in lines {
         if let Ok((a, b)) = scan_fmt!(&line, "{x}-{x}", [hex usize], [hex usize]) {
             segments.push(Segment {
                 start_address: a,
@@ -196,26 +210,7 @@ fn get_virtual_segments(pid: i32) -> Result<Vec<Segment>, io::Error> {
             error!("Unable to parse maps line: {}", line);
         }
     }
-    Ok(segments)
-}
-
-fn get_physical_segments() -> Result<Vec<Segment>, io::Error> {
-    let mut segments: Vec<Segment> = Vec::new();
-    let file = File::open("/proc/iomem")?;
-    for line in BufReader::new(file).lines() {
-        let line = line?;
-        if line.contains("System RAM") {
-            if let Ok((a, b)) = scan_fmt!(&line, "{x}-{x}", [hex usize], [hex usize]) {
-                segments.push(Segment {
-                    start_address: a,
-                    size: b - a,
-                })
-            } else {
-                error!("Unable to parse maps line: {}", line);
-            }
-        }
-    }
-    Ok(segments)
+    return segments;
 }
 
 fn set_idlemap() -> std::io::Result<()> {
