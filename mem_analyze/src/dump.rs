@@ -39,10 +39,10 @@ pub fn get_host_memory(sleep: u64, inspect_ram: bool) -> Result<super::ProcessMe
         segments: physical_segments.iter().map(|segment|
             super::Segment {
                 addr_start: 0,
-                page_flags: get_kpageflags(segment).unwrap().into_iter().enumerate().map(|(pfn_idx, pfn_flags)| {
-                    let active_page_add = get_active_add(pfn_idx as u64, &idlemap);
+                page_flags: get_kpageflags(segment).unwrap().into_iter().enumerate().map(|(pfn_offset, pfn_flags)| {
+                    let active_page_add = get_active_add(((segment.start_address / PAGE_SIZE) + pfn_offset) as u64, &idlemap);
                     let zero_page_add: u64 = match inspect_ram {
-                        true => match get_pfn_content(pfn_idx) {
+                        true => match get_pfn_content((segment.start_address / PAGE_SIZE) + pfn_offset) {
                             Ok(content) => match content.iter().all(|&x| x == 0) {
                                 true => 1 << super::ZERO_PAGE_BIT,
                                 false => 0,
