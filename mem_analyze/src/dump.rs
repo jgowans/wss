@@ -1,7 +1,6 @@
 use std::fs::File;
 use std::io;
 use std::io::{BufReader, BufRead, Write, Read, Seek, SeekFrom};
-use sysinfo::SystemExt;
 use byteorder::{ByteOrder, LittleEndian};
 use std::{thread, time};
 use chrono::Utc;
@@ -84,31 +83,18 @@ pub fn get_memory(pid: i32, sleep: u64) -> Result<super::ProcessMemory, std::io:
     let start_time = Utc::now();
     for segment in segments {
         let pagemap: Vec<u64> = get_pagemap(pid, &segment)?;
+        let mut memory_data_memo = MemoryDataMemo::new(pid, &segment, &pagemap)?;
         debug!("Pagemap for segment at {} with size {} has len {}", segment.start_address, segment.size, pagemap.len());
         //let all_page_data = get_page_content(pid, segment.start_address)?;
-        let mut data_slice: Option<Vec<u8>> = None;
-        let mut data_slice_offset = 0;
         let page_flags: Vec<u64> = pagemap.iter().enumerate().map(|(page_idx, pagemap_word)|
             if pagemap_word & 1 << 63 == 0 {
-                data_slice = None; //end of contiguous; clear for next mapped page.
                 return pagemap_word.clone();
             } else {
                 if pagemap_word & 1 << 62 != 0 {
-                    data_slice = None; //end of contiguous; clear for next mapped page.
                     return pagemap_word.clone();
 
                 } else {
-                    if data_slice == None {
-                        let page_range = contiguous_mapped_length(&pagemap[page_idx..]);
-                        assert!(page_range > 0); // debugging; remove once happy with algorithm.
-                        data_slice_offset = 0;
-                        data_slice = Some(get_page_content(pid, segment.start_address + (page_idx * PAGE_SIZE), page_range).unwrap());
-                    }
-                    let page_data = match data_slice {
-                        None => panic!("We were supposed to pre-read this but didn't...."),
-                        Some(ref data_slice) => data_slice[(data_slice_offset* PAGE_SIZE)..((data_slice_offset+1) * PAGE_SIZE)].to_vec(),
-                    };
-                    data_slice_offset += 1;
+                    let page_data: &[u8] = memory_data_memo.get_page_data(page_idx).unwrap();
 
                     let zero_page_add: u64 = match page_data.iter().all(|&x| x == 0) {
                         true => 1 << super::ZERO_PAGE_BIT,
@@ -154,6 +140,50 @@ fn contiguous_mapped_length(pagemap: &[u64]) -> usize {
 struct Segment {
     pub start_address: usize,
     pub size: usize,
+}
+
+struct MemoryDataMemo<'a> {
+    segment: &'a Segment,
+    pagemap: &'a[u64],
+    start_page_offset: usize,
+    pages_read: usize,
+    data: Vec<u8>,
+    file: File,
+}
+
+impl<'a> MemoryDataMemo<'a> {
+    pub fn new(pid: i32, segment: &'a Segment, pagemap: &'a[u64]) -> std::io::Result<MemoryDataMemo<'a>> {
+        Ok(MemoryDataMemo {
+            segment: segment,
+            pagemap: pagemap,
+            start_page_offset: 0,
+            pages_read: 0,
+            data: vec![0; PAGE_SIZE * 10000],
+            file: if pid == 0 {
+                File::open("/dev/mem")?
+            } else {
+                File::open(format!("/proc/{}/mem", pid))?
+            },
+        })
+    }
+
+    // At construction we have a segment and a pagemap for that segment.
+    // Now, given a page offset from the start of the segment return the data for that page.
+    // TODO: put pagemap in the segment??
+    pub fn get_page_data(&mut self, page_offset: usize) -> std::io::Result<&[u8]> {
+        //debug!("Getting data for offset {}", page_offset);
+        if page_offset >= self.start_page_offset + self.pages_read {
+            let page_range = contiguous_mapped_length(&self.pagemap[page_offset..]);
+            let end_idx = min(self.data.len() / PAGE_SIZE, page_range);
+            self.file.seek(SeekFrom::Start((self.segment.start_address + (page_offset * PAGE_SIZE)) as u64))?;
+            self.file.read_exact(&mut self.data[0..(end_idx * PAGE_SIZE)])?;
+            self.start_page_offset = page_offset;
+            self.pages_read = end_idx;
+        }
+        return Ok(&self.data[
+                  (page_offset-self.start_page_offset)*PAGE_SIZE
+                  ..(page_offset-self.start_page_offset+1)*PAGE_SIZE])
+    }
 }
 
 fn get_pagemap(pid: i32, segment: &Segment) -> std::io::Result<Vec<u64>> {
@@ -256,15 +286,6 @@ fn load_idlemap(physical_segments: &[Segment]) -> std::io::Result<Vec<u8>> {
     Ok(idlemap)
 }
 
-fn get_page_content(pid: i32, page_addr_start: usize, pages: usize) -> std::io::Result<Vec<u8>> {
-    let mut mem_file = File::open(format!("/proc/{}/mem", pid))?;
-    mem_file.seek(SeekFrom::Start(page_addr_start as u64))?;
-    let mut mem: Vec<u8> = Vec::with_capacity(pages * PAGE_SIZE);
-    mem.resize(pages * PAGE_SIZE, 0); // why do I have to do this...?
-    mem_file.read_exact(mem.as_mut_slice())?;
-    Ok(mem)
-}
-
 fn get_pfn_content(pfn: usize) -> std::io::Result<Vec<u8>> {
     let mut mem_file = File::open("/dev/mem")?;
     mem_file.seek(SeekFrom::Start((pfn * PAGE_SIZE) as u64))?;
@@ -272,13 +293,4 @@ fn get_pfn_content(pfn: usize) -> std::io::Result<Vec<u8>> {
     mem.resize(PAGE_SIZE, 0); // why do I have to do this...?
     mem_file.read_exact(mem.as_mut_slice())?;
     Ok(mem)
-}
-
-fn system_ram_pages() -> usize {
-    system_ram_bytes() / PAGE_SIZE
-}
-
-fn system_ram_bytes() -> usize {
-    // this seems to take 60 ms. :'-(
-    sysinfo::System::new().get_total_memory() as usize * 1024
 }
