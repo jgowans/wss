@@ -35,13 +35,17 @@ pub fn get_host_memory(sleep: u64, inspect_ram: bool) -> Result<super::ProcessMe
     let idlemap = load_idlemap(&physical_segments)?;
     Ok(super::ProcessMemory {
         timestamp: snapshot_time,
-        segments: physical_segments.iter().map(|segment|
+        segments: physical_segments.iter().map(|segment| {
+            let kpageflags = get_kpageflags(segment).unwrap();
+            let mut memory_data_memo = MemoryDataMemo::new(0, &segment, &kpageflags).unwrap();
             super::Segment {
                 addr_start: 0,
-                page_flags: get_kpageflags(segment).unwrap().into_iter().enumerate().map(|(pfn_offset, pfn_flags)| {
+                page_flags: kpageflags.iter().enumerate().map(|(pfn_offset, pfn_flags)| {
                     let active_page_add = get_active_add(((segment.start_address / PAGE_SIZE) + pfn_offset) as u64, &idlemap);
-                    let zero_page_add: u64 = match inspect_ram {
-                        true => match get_pfn_content((segment.start_address / PAGE_SIZE) + pfn_offset) {
+                    // TODO: remove the pfn_flags != 0 check when we understand why some pages
+                    // access fault into QEMU hw emulation on Xen. Maybe try GP?
+                    let zero_page_add: u64 = match inspect_ram && *pfn_flags != 0 {
+                        true => match memory_data_memo.get_page_data(pfn_offset) {
                             Ok(content) => match content.iter().all(|&x| x == 0) {
                                 true => 1 << super::ZERO_PAGE_BIT,
                                 false => 0,
@@ -55,7 +59,7 @@ pub fn get_host_memory(sleep: u64, inspect_ram: bool) -> Result<super::ProcessMe
                         + zero_page_add
                 }).collect(),
             }
-        ).collect(),
+        }).collect(),
     })
 }
 
@@ -143,6 +147,7 @@ struct Segment {
 }
 
 struct MemoryDataMemo<'a> {
+    pid: i32,
     segment: &'a Segment,
     pagemap: &'a[u64],
     start_page_offset: usize,
@@ -154,6 +159,7 @@ struct MemoryDataMemo<'a> {
 impl<'a> MemoryDataMemo<'a> {
     pub fn new(pid: i32, segment: &'a Segment, pagemap: &'a[u64]) -> std::io::Result<MemoryDataMemo<'a>> {
         Ok(MemoryDataMemo {
+            pid: pid,
             segment: segment,
             pagemap: pagemap,
             start_page_offset: 0,
@@ -173,7 +179,14 @@ impl<'a> MemoryDataMemo<'a> {
     pub fn get_page_data(&mut self, page_offset: usize) -> std::io::Result<&[u8]> {
         //debug!("Getting data for offset {}", page_offset);
         if page_offset >= self.start_page_offset + self.pages_read {
-            let page_range = contiguous_mapped_length(&self.pagemap[page_offset..]);
+            let page_range = if self.pid == 0 {
+                match self.pagemap[page_offset..].iter().position(|&flags| flags == 0) {
+                    Some(idx) => idx,
+                    None => self.pagemap.len() - page_offset,
+                }
+            } else {
+                contiguous_mapped_length(&self.pagemap[page_offset..])
+            };
             let end_idx = min(self.data.len() / PAGE_SIZE, page_range);
             self.file.seek(SeekFrom::Start((self.segment.start_address + (page_offset * PAGE_SIZE)) as u64))?;
             self.file.read_exact(&mut self.data[0..(end_idx * PAGE_SIZE)])?;
@@ -284,13 +297,4 @@ fn load_idlemap(physical_segments: &[Segment]) -> std::io::Result<Vec<u8>> {
     }
     debug!("Idlemap of {} bytes loaded to vec with size {} in {} ms", read_counter, idlemap.len(), (Utc::now() - start_time).num_milliseconds());
     Ok(idlemap)
-}
-
-fn get_pfn_content(pfn: usize) -> std::io::Result<Vec<u8>> {
-    let mut mem_file = File::open("/dev/mem")?;
-    mem_file.seek(SeekFrom::Start((pfn * PAGE_SIZE) as u64))?;
-    let mut mem: Vec<u8> = Vec::with_capacity(PAGE_SIZE);
-    mem.resize(PAGE_SIZE, 0); // why do I have to do this...?
-    mem_file.read_exact(mem.as_mut_slice())?;
-    Ok(mem)
 }
