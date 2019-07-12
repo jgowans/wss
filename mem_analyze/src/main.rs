@@ -34,6 +34,10 @@ fn main() -> std::io::Result<()> {
              .long("pid")
              .takes_value(true)
              .multiple(true))
+        .arg(Arg::with_name("sleep")
+             .short("s")
+             .long("sleep")
+             .takes_value(true))
         .arg(Arg::with_name("inspect-ram")
              .short("i")
              .long("inspect-ram")
@@ -56,6 +60,11 @@ fn main() -> std::io::Result<()> {
         None => Vec::new(),
     };
 
+    let sleep: u64 = match matches.value_of("sleep") {
+        Some(time) => time.parse().expect("time must be u64"),
+        None => SLEEP_TIME,
+    };
+
     let inspect_ram: bool = matches.is_present("inspect-ram");
     let s3_persist: bool = matches.is_present("s3-persist");
 
@@ -63,7 +72,7 @@ fn main() -> std::io::Result<()> {
         info!("PID supplied: {:?}\n", pids);
         loop {
             let start_time = Utc::now();
-            let process_memory = mem_analyze::dump::get_memory(pids[0], SLEEP_TIME)?;
+            let process_memory = mem_analyze::dump::get_memory(pids[0], sleep)?;
             mem_analyze::persist::write_process_memory(pids[0], &region, &process_memory, s3_persist)?;
             mem_analyze::statistics::page_analytics(&process_memory);
             info!("---------- Completed analysis in in {} ms ----------",
@@ -73,7 +82,7 @@ fn main() -> std::io::Result<()> {
         info!("No PIDs; analyzing whole system\n");
         loop {
             let start_time = Utc::now();
-            let process_memory = mem_analyze::dump::get_host_memory(SLEEP_TIME, inspect_ram)?;
+            let process_memory = mem_analyze::dump::get_host_memory(sleep, inspect_ram)?;
             mem_analyze::persist::write_process_memory(0, &region, &process_memory, s3_persist)?;
             mem_analyze::statistics::page_analytics(&process_memory);
             info!("---------- Completed analysis in in {} ms ----------",
