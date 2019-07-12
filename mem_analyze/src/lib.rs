@@ -14,10 +14,11 @@ pub mod persist;
 use chrono::{DateTime, Utc};
 
 // https://www.kernel.org/doc/Documentation/vm/pagemap.txt
+pub const LRU_PAGE_BIT: u8 = 5;
 // We're going to steal bits from the PFN (0-54) of the /proc/pid/pagemap,
 // while using the same bits of /proc/kpageflags
-pub const ZERO_PAGE_BIT: u8 = 24;
-pub const ACTIVE_PAGE_BIT: u8 = 27;
+pub const ZERO_PAGE_BIT: u8 = 57;
+pub const ACTIVE_PAGE_BIT: u8 = 58;
 
 pub struct ProcessMemory {
     pub timestamp: DateTime<Utc>,

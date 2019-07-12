@@ -41,7 +41,13 @@ pub fn get_host_memory(sleep: u64, inspect_ram: bool) -> Result<super::ProcessMe
             super::Segment {
                 addr_start: 0,
                 page_flags: kpageflags.iter().enumerate().map(|(pfn_offset, pfn_flags)| {
-                    let active_page_add = get_active_add(((segment.start_address / PAGE_SIZE) + pfn_offset) as u64, &idlemap);
+                    // https://github.com/torvalds/linux/blob/master/mm/page_idle.c#L18-L52
+                    // https://www.kernel.org/doc/html/latest/admin-guide/mm/idle_page_tracking.html#implementation-details
+                    let active_page_add = if pfn_flags & 1 << super::LRU_PAGE_BIT == 0 {
+                        0
+                    } else {
+                        get_active_add(((segment.start_address / PAGE_SIZE) + pfn_offset) as u64, &idlemap)
+                    };
                     // TODO: remove the pfn_flags != 0 check when we understand why some pages
                     // access fault into QEMU hw emulation on Xen. Maybe try GP?
                     let zero_page_add: u64 = match inspect_ram && *pfn_flags != 0 {
