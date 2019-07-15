@@ -20,7 +20,7 @@ end
 virtual_address = virtual_addresses.first
 
 # This will get messy if we add in page content hashes...
-image_size = Math.sqrt(File.size("#{timestamps[-2]}/#{virtual_address}")).ceil()
+image_size = Math.sqrt(File.size("#{timestamps[-2]}/#{virtual_address}") / 8).ceil()
 puts("Using image size #{image_size} from file size #{File.size("#{timestamps[-2]}/#{virtual_address}")}")
 
 label_border = (image_size / 30.0).ceil()
@@ -34,34 +34,35 @@ mapped_pages_arr = Array.new
 pixels = Array.new(3 * image_size * image_size, 0)
 (0...timestamps.size).each do |timestamp_idx|
   puts("#{timestamp_idx} / #{timestamps.size}")
-  file = File.open("#{timestamps[timestamp_idx]}/#{virtual_address}")
+  file = File.open("#{timestamps[timestamp_idx]}/#{virtual_address}", "rb")
+  pageflags = file.read.unpack("Q*")
   active_pages = 0
   zero_pages = 0
   mapped_pages = 0
   page_idx = 0
-  file.each_byte do |byte|
-    activity_mask = 0x03
-    zero_mask = 1 << 2
+  byte_idx = 0
+  pageflags.each do |byte|
+    active = (byte & (1 << 58) == 0) ? false : true
+    zero_mask = 1 << 57
     zero_add = ((byte & zero_mask) == 0) ? 0 : 0x8000
+    present = (byte & (1 << 63) == 0) ? false : true
     zero_pages += 1 if zero_add != 0
-    if ((byte & activity_mask) == 0)
-      pixels[(3 * page_idx) + 0 ] = 0
-      pixels[(3 * page_idx) + 1 ] = 0
-      pixels[(3 * page_idx) + 2 ] = 0
-    elsif ((byte & activity_mask) == 0x02)
-      pixels[(3 * page_idx) + 0 ] = 0
-      pixels[(3 * page_idx) + 1 ] = 0x7FFF + zero_add
-      pixels[(3 * page_idx) + 2 ] = 0
+    if present
       mapped_pages += 1
-    elsif ((byte & activity_mask) == 0x03)
-      pixels[(3 * page_idx) + 0 ] = 0x7FFF + zero_add
-      pixels[(3 * page_idx) + 1 ] = 0
-      pixels[(3 * page_idx) + 2 ] = 0
-      active_pages += 1
-      mapped_pages += 1
+      if active
+        pixels[(3 * page_idx) + 0 ] = 0x7FFF + zero_add
+        pixels[(3 * page_idx) + 1 ] = 0
+        pixels[(3 * page_idx) + 2 ] = 0
+        active_pages += 1
+      else
+        pixels[(3 * page_idx) + 0 ] = 0
+        pixels[(3 * page_idx) + 1 ] = 0x7FFF + zero_add
+        pixels[(3 * page_idx) + 2 ] = 0
+      end
     else
-      puts("Unknown byte: #{byte & mask}")
-      exit
+      pixels[(3 * page_idx) + 0 ] = 0
+      pixels[(3 * page_idx) + 1 ] = 0
+      pixels[(3 * page_idx) + 2 ] = 0
     end
     page_idx += 1
   end
