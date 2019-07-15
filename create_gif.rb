@@ -10,18 +10,20 @@ if ARGV.length != 1
 end
 pid = ARGV[0]
 
+PAGE_SIZE = 4096
+
 Dir.chdir("/tmp/wss/#{pid}")
 timestamps = Dir.glob("20*").sort
 puts("Using timestamps #{timestamps}")
-virtual_addresses = Dir.glob("#{timestamps[-2]}/0x*").map{|f| f.split("/").last}
-if virtual_addresses.length != 1
-  puts("Got invalid number of virtual addresses: #{virtual_addresses}")
-end
-virtual_address = virtual_addresses.first
+virtual_addresses = Dir.glob("#{timestamps[-2]}/0x*").map{|f| f.split("/").last}.sort_by{|addr| addr.to_i(16)}
+first_addr = virtual_addresses.first.to_i(16)
+first_pfn = first_addr / PAGE_SIZE
+last_file_pages = File.size("#{timestamps[-2]}/#{virtual_addresses.last}") / 8 # ought to be multiple of 8...
+last_pfn = (virtual_addresses.last.to_i(16) / PAGE_SIZE) + last_file_pages
 
 # This will get messy if we add in page content hashes...
-image_size = Math.sqrt(File.size("#{timestamps[-2]}/#{virtual_address}") / 8).ceil()
-puts("Using image size #{image_size} from file size #{File.size("#{timestamps[-2]}/#{virtual_address}")}")
+image_size = Math.sqrt(last_pfn - first_pfn).ceil()
+puts("Using image size #{image_size}")
 
 label_border = (image_size / 30.0).ceil()
 
@@ -33,43 +35,49 @@ mapped_pages_arr = Array.new
 
 pixels = Array.new(3 * image_size * image_size, 0)
 (0...timestamps.size).each do |timestamp_idx|
-  puts("#{timestamp_idx} / #{timestamps.size}")
-  file = File.open("#{timestamps[timestamp_idx]}/#{virtual_address}", "rb")
-  pageflags = file.read.unpack("Q*")
+  total_pages = 0
   active_pages = 0
   zero_pages = 0
   mapped_pages = 0
-  page_idx = 0
-  byte_idx = 0
-  pageflags.each do |byte|
-    active = (byte & (1 << 58) == 0) ? false : true
-    zero_mask = 1 << 57
-    zero_add = ((byte & zero_mask) == 0) ? 0 : 0x8000
-    present = (byte & (1 << 63) == 0) ? false : true
-    zero_pages += 1 if zero_add != 0
-    if present
-      mapped_pages += 1
-      if active
-        pixels[(3 * page_idx) + 0 ] = 0x7FFF + zero_add
-        pixels[(3 * page_idx) + 1 ] = 0
-        pixels[(3 * page_idx) + 2 ] = 0
-        active_pages += 1
+  virtual_addresses.each do |virtual_address|
+    puts("#{timestamp_idx} / #{timestamps.size}")
+    file = File.open("#{timestamps[timestamp_idx]}/#{virtual_address}", "rb")
+    puts("Opened #{timestamps[timestamp_idx]}/#{virtual_address}")
+    pageflags = file.read.unpack("Q*")
+    page_idx = virtual_address.to_i(16) / PAGE_SIZE
+    byte_idx = 0
+    pageflags.each do |byte|
+      total_pages += 1
+      active = (byte & (1 << 58) == 0) ? false : true
+      zero_mask = 1 << 57
+      zero_add = ((byte & zero_mask) == 0) ? 0 : 0x8000
+      #present = (byte & (1 << 63) == 0) ? false : true
+      present = (byte & (1 << 5) == 0) ? false : true
+      zero_pages += 1 if zero_add != 0
+      if present
+        mapped_pages += 1
+        if active
+          pixels[(3 * page_idx) + 0 ] = 0x7FFF + zero_add
+          pixels[(3 * page_idx) + 1 ] = 0
+          pixels[(3 * page_idx) + 2 ] = 0
+          active_pages += 1
+        else
+          pixels[(3 * page_idx) + 0 ] = 0
+          pixels[(3 * page_idx) + 1 ] = 0x7FFF + zero_add
+          pixels[(3 * page_idx) + 2 ] = 0
+        end
       else
         pixels[(3 * page_idx) + 0 ] = 0
-        pixels[(3 * page_idx) + 1 ] = 0x7FFF + zero_add
+        pixels[(3 * page_idx) + 1 ] = 0
         pixels[(3 * page_idx) + 2 ] = 0
       end
-    else
-      pixels[(3 * page_idx) + 0 ] = 0
-      pixels[(3 * page_idx) + 1 ] = 0
-      pixels[(3 * page_idx) + 2 ] = 0
+      page_idx += 1
     end
-    page_idx += 1
   end
 
-  active_pages_arr << active_pages / page_idx.to_f
-  zero_pages_arr << zero_pages / page_idx.to_f
-  mapped_pages_arr << mapped_pages / page_idx.to_f
+  active_pages_arr << active_pages / total_pages.to_f
+  zero_pages_arr << zero_pages / total_pages.to_f
+  mapped_pages_arr << mapped_pages / total_pages.to_f
 
   image = Magick::Image.new(image_size, image_size) { self.background_color = "black" }
   puts("Image size: #{image_size}")
