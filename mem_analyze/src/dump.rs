@@ -39,7 +39,7 @@ pub fn get_host_memory(sleep: u64, inspect_ram: bool) -> Result<super::ProcessMe
             let kpageflags = get_kpageflags(segment).unwrap();
             let mut memory_data_memo = MemoryDataMemo::new(0, &segment, &kpageflags).unwrap();
             super::Segment {
-                addr_start: 0,
+                addr_start: segment.start_address,
                 page_flags: kpageflags.iter().enumerate().map(|(pfn_offset, pfn_flags)| {
                     // https://github.com/torvalds/linux/blob/master/mm/page_idle.c#L18-L52
                     // https://www.kernel.org/doc/html/latest/admin-guide/mm/idle_page_tracking.html#implementation-details
