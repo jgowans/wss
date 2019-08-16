@@ -3,6 +3,7 @@ extern crate ring;
 extern crate mem_analyze;
 extern crate simplelog;
 extern crate clap;
+extern crate telnet;
 
 #[macro_use]
 extern crate log;
@@ -68,6 +69,8 @@ fn main() -> std::io::Result<()> {
     let inspect_ram: bool = matches.is_present("inspect-ram");
     let s3_persist: bool = matches.is_present("s3-persist");
 
+    let mut vmm = mem_analyze::vmm::Vmm::new();
+
     if pids.len() > 0 {
         info!("PID supplied: {:?}\n", pids);
         loop {
@@ -75,6 +78,7 @@ fn main() -> std::io::Result<()> {
             let process_memory = mem_analyze::dump::get_memory(pids[0], sleep)?;
             mem_analyze::persist::write_process_memory(pids[0], &region, &process_memory, s3_persist)?;
             mem_analyze::statistics::page_analytics(&process_memory);
+            vmm.swap_some_out(&process_memory.segments[0], 10);
             info!("---------- Completed analysis in in {} ms ----------",
                   (Utc::now() - start_time).num_milliseconds());
         }

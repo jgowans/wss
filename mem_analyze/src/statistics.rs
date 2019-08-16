@@ -3,6 +3,7 @@ pub fn page_analytics(memory: &super::ProcessMemory) {
     let mut lru_pages = 0;
     let mut zero_pages = 0;
     let mut active_pages = 0;
+    let mut present_pages = 0;
     for segment in &memory.segments {
         for page_flags in &segment.page_flags {
             total_pages += 1;
@@ -15,6 +16,9 @@ pub fn page_analytics(memory: &super::ProcessMemory) {
             if page_flags & (1 << super::ACTIVE_PAGE_BIT) != 0 {
                 active_pages += 1;
             }
+            if page_flags & (1 << super::PRESENT_PAGE_BIT) != 0 {
+                present_pages += 1;
+            }
         }
         debug!("Segment start {:x} with size {}", segment.addr_start, segment.page_flags.len());
     }
@@ -22,6 +26,7 @@ pub fn page_analytics(memory: &super::ProcessMemory) {
     log_info("LRU", lru_pages, total_pages);
     log_info("Zero", zero_pages, total_pages);
     log_info("Active", active_pages, total_pages);
+    log_info("Present", present_pages, total_pages);
 
     fn log_info(name: &str, val: u64, total: u64) {
         info!("{}", format!("{} pages: {} = {:.1}%", name, val, 100.0 * val as f32 / total as f32));
