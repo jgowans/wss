@@ -3,6 +3,10 @@ extern crate scan_fmt;
 
 extern crate byteorder;
 extern crate chrono;
+extern crate rand;
+
+#[macro_use]
+extern crate json;
 
 #[macro_use]
 extern crate log;
@@ -10,11 +14,13 @@ extern crate log;
 pub mod statistics;
 pub mod dump;
 pub mod persist;
+pub mod vmm;
 
 use chrono::{DateTime, Utc};
 
 // https://www.kernel.org/doc/Documentation/vm/pagemap.txt
 pub const LRU_PAGE_BIT: u8 = 5;
+pub const PRESENT_PAGE_BIT: u8 = 63;
 // We're going to steal bits from the PFN (0-54) of the /proc/pid/pagemap,
 // while using the same bits of /proc/kpageflags
 pub const ZERO_PAGE_BIT: u8 = 57;

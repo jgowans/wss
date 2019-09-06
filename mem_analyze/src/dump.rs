@@ -8,8 +8,8 @@ use std::cmp::min;
 //use nix::sys::{ptrace, wait, signal};
 //use nix::unistd::Pid;
 
-// only interested in segments with at least 1000 pages
-const SEGMENT_THRESHOLD: usize = 1000 * 4096;
+// only interested in segments at least 100 MiB big. The rest are QEMU houstkeeping.
+const SEGMENT_THRESHOLD: usize = 100 * 1024 * 1024;
 
 // hmm, this is hard-coding 64-bit systems in here...
 // TODO: detect user space end from current system address size.
@@ -41,6 +41,7 @@ pub fn get_host_memory(sleep: u64, inspect_ram: bool) -> Result<super::ProcessMe
             super::Segment {
                 addr_start: segment.start_address,
                 page_flags: kpageflags.iter().enumerate().map(|(pfn_offset, pfn_flags)| {
+                    // TODO: map and unset PRESENT big
                     // https://github.com/torvalds/linux/blob/master/mm/page_idle.c#L18-L52
                     // https://www.kernel.org/doc/html/latest/admin-guide/mm/idle_page_tracking.html#implementation-details
                     let active_page_add = if pfn_flags & 1 << super::LRU_PAGE_BIT == 0 {
@@ -94,7 +95,7 @@ pub fn get_memory(pid: i32, sleep: u64) -> Result<super::ProcessMemory, std::io:
     for segment in segments {
         let pagemap: Vec<u64> = get_pagemap(pid, &segment)?;
         let mut memory_data_memo = MemoryDataMemo::new(pid, &segment, &pagemap)?;
-        debug!("Pagemap for segment at {} with size {} has len {}", segment.start_address, segment.size, pagemap.len());
+        debug!("Pagemap for segment at {:x} with size {} has len {}", segment.start_address, segment.size, pagemap.len());
         //let all_page_data = get_page_content(pid, segment.start_address)?;
         let page_flags: Vec<u64> = pagemap.iter().enumerate().map(|(page_idx, pagemap_word)|
             if pagemap_word & 1 << 63 == 0 {
