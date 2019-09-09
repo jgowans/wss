@@ -39,7 +39,7 @@ impl Vmm {
             .map(|page_offset| segment.addr_start + (4096 * page_offset))
             .collect();
         let data = object!{
-            "execute" => "pageout",
+            "execute" => "pageout_pages",
             "arguments" => object!{"pages" => selected }
         };
         info!("Would send {:?}", data.dump());
