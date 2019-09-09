@@ -4,6 +4,7 @@ extern crate scan_fmt;
 extern crate byteorder;
 extern crate chrono;
 extern crate rand;
+extern crate sysinfo;
 
 #[macro_use]
 extern crate json;

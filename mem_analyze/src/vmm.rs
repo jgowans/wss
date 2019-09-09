@@ -1,6 +1,5 @@
 use telnet::Telnet;
 use telnet::TelnetEvent;
-use rand::thread_rng;
 use rand::distributions::{Distribution, Uniform};
 
 pub struct Vmm {

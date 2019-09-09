@@ -76,8 +76,8 @@ fn main() -> std::io::Result<()> {
         loop {
             let start_time = Utc::now();
             let process_memory = mem_analyze::dump::get_memory(pids[0], sleep)?;
+            mem_analyze::statistics::page_analytics(pids[0], &process_memory);
             mem_analyze::persist::write_process_memory(pids[0], &region, &process_memory, s3_persist)?;
-            mem_analyze::statistics::page_analytics(&process_memory);
             vmm.swap_some_out(&process_memory.segments[0], 10);
             info!("---------- Completed analysis in in {} ms ----------",
                   (Utc::now() - start_time).num_milliseconds());
@@ -87,8 +87,8 @@ fn main() -> std::io::Result<()> {
         loop {
             let start_time = Utc::now();
             let process_memory = mem_analyze::dump::get_host_memory(sleep, inspect_ram)?;
+            mem_analyze::statistics::page_analytics(pids[0], &process_memory);
             mem_analyze::persist::write_process_memory(0, &region, &process_memory, s3_persist)?;
-            mem_analyze::statistics::page_analytics(&process_memory);
             info!("---------- Completed analysis in in {} ms ----------",
                   (Utc::now() - start_time).num_milliseconds());
         }
