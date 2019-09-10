@@ -40,7 +40,9 @@ pub fn page_analytics(pid: i32, memory: &super::ProcessMemory) {
         active_pages.to_string(),
         present_pages.to_string()];
     append_process_stats(pid, &mut row);
-    let mut wtr = Writer::from_writer(OpenOptions::new().append(true).open(format!("/tmp/wss/{}.csv", pid)).unwrap());
+    let mut wtr = Writer::from_writer(
+        OpenOptions::new().append(true).create(true)
+            .open(format!("/tmp/wss/{}.csv", pid)).unwrap());
     wtr.write_record(row).unwrap();
     wtr.flush().unwrap();
 
