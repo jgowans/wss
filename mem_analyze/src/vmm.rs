@@ -1,6 +1,6 @@
 use telnet::Telnet;
 use telnet::TelnetEvent;
-use rand::distributions::{Distribution, Uniform};
+use rand::seq::SliceRandom;
 
 pub struct Vmm {
     telnet: Telnet,
@@ -31,18 +31,17 @@ impl Vmm {
             .filter(|(_idx, &val)| val & (1 << super::ACTIVE_PAGE_BIT) == 0)
             .map(|(idx, _val)| idx)
             .collect();
-        // there's gotta be a nicer way to select a few random elements.... 
         let mut rng = rand::thread_rng();
-        let between = Uniform::new(0, idle_pages.len());
-        let selected: Vec<usize> = (0..pages_to_swap)
-            .map(|_| idle_pages[between.sample(&mut rng)])
+        let selected: Vec<usize> = idle_pages.as_slice()
+            .choose_multiple(&mut rng, pages_to_swap as usize)
             .map(|page_offset| segment.addr_start + (4096 * page_offset))
             .collect();
+        debug!("Idle_pages len: {}", idle_pages.len());
+        debug!("pageout len: {}", selected.len());
         let data = object!{
             "execute" => "pageout_pages",
             "arguments" => object!{"pages" => selected }
         };
-        info!("Would send {:?}", data.dump());
         self.telnet.write(data.dump().as_bytes()).unwrap();
         match self.telnet.read().unwrap() {
             TelnetEvent::Data(d) => print!("{}", std::str::from_utf8(&d).unwrap()),
