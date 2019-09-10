@@ -5,6 +5,7 @@ extern crate byteorder;
 extern crate chrono;
 extern crate rand;
 extern crate sysinfo;
+extern crate lz4;
 
 #[macro_use]
 extern crate json;

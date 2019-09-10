@@ -8,12 +8,14 @@
 // 7 : version
 
 use std::fs;
+use std::io;
 use std::fs::File;
 use std::io::Write;
 use chrono::SecondsFormat;
 use std::collections::HashMap;
 use sys_info::hostname;
 use byteorder::{ByteOrder, LittleEndian};
+use lz4::EncoderBuilder;
 
 use rusoto_core::Region;
 use rusoto_s3::S3Client;
@@ -30,11 +32,17 @@ pub fn write_process_memory(pid: i32, region: &str, memory: &super::ProcessMemor
     };
 
     for (segment_start, segment_data) in process_to_page_summary(&memory).into_iter() {
-        write_to_file(&base_dir, segment_start, &segment_data)?;
+        let mut compressed: Vec<u8> = Vec::new();
+        let mut encoder = EncoderBuilder::new()
+            .level(4)
+            .build(&mut compressed)?;
+        io::copy(&mut segment_data.as_slice(), &mut encoder)?;
+        encoder.finish().1?;
+        write_to_file(&base_dir, segment_start, compressed.as_slice())?;
         if s3_persist {
             write_to_s3(region,
                         &format!("{}/{}", hostname, memory.timestamp.to_rfc3339_opts(SecondsFormat::Secs, true)),
-                        segment_start, segment_data);
+                        segment_start, compressed);
         }
     }
     Ok(())
@@ -51,10 +59,10 @@ fn process_to_page_summary(memory: &super::ProcessMemory) -> HashMap<usize, Vec<
     return segment_data;
 }
 
-fn write_to_file(base_dir: &str, segment_start: usize, segment_data: &Vec<u8>) -> std::io::Result<()> {
+fn write_to_file(base_dir: &str, segment_start: usize, segment_data: &[u8]) -> std::io::Result<()> {
     let mut file = File::create(format!("{}/0x{:x}", base_dir, segment_start))?;
-    info!("Persisted process memory metadata to: {:?}", file);
-    file.write(&segment_data)?;
+    info!("Persisting process memory metadata to: {:?}", &file);
+    file.write(segment_data)?;
     Ok(())
 }
 
