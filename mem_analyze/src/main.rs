@@ -39,6 +39,9 @@ fn main() -> std::io::Result<()> {
              .short("s")
              .long("sleep")
              .takes_value(true))
+        .arg(Arg::with_name("pageout")
+             .long("pageout")
+             .takes_value(true))
         .arg(Arg::with_name("inspect-ram")
              .short("i")
              .long("inspect-ram")
@@ -66,6 +69,11 @@ fn main() -> std::io::Result<()> {
         None => SLEEP_TIME,
     };
 
+    let pageout: u64 = match matches.value_of("pageout") {
+        Some(pageout) => pageout.parse().expect("pageout must be u64"),
+        None => 0,
+    };
+
     let inspect_ram: bool = matches.is_present("inspect-ram");
     let s3_persist: bool = matches.is_present("s3-persist");
 
@@ -78,7 +86,7 @@ fn main() -> std::io::Result<()> {
             let process_memory = mem_analyze::dump::get_memory(pids[0], sleep)?;
             mem_analyze::statistics::page_analytics(pids[0], &process_memory);
             mem_analyze::persist::write_process_memory(pids[0], &region, &process_memory, s3_persist)?;
-            vmm.swap_some_out(&process_memory.segments[0], 10);
+            vmm.swap_some_out(&process_memory.segments[0], pageout);
             info!("---------- Completed analysis in in {} ms ----------",
                   (Utc::now() - start_time).num_milliseconds());
         }
