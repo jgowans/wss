@@ -1,8 +1,10 @@
 #!/usr/bin/env ruby
 
+require 'pry'
 require 'time'
 require 'rmagick'
 require 'gruff'
+require 'lz4-ruby'
 
 if ARGV.length != 1
   puts("Usage: create_gif.rb pid")
@@ -11,6 +13,12 @@ end
 pid = ARGV[0]
 
 PAGE_SIZE = 4096
+# always bits
+SWAPPED_BIT = 62
+PRESENT_BIT = 63
+ACTIVE_BIT = 58
+# in-guest tracking only bits
+LRU_BIT = 5
 
 Dir.chdir("/tmp/wss/#{pid}")
 timestamps = Dir.glob("20*").sort
@@ -44,28 +52,32 @@ pixels = Array.new(3 * image_size * image_size, 0)
     file = File.open("#{timestamps[timestamp_idx]}/#{virtual_address}", "rb")
     puts("Opened #{timestamps[timestamp_idx]}/#{virtual_address}")
     pageflags = file.read.unpack("Q*")
-    page_idx = virtual_address.to_i(16) / PAGE_SIZE
-    byte_idx = 0
+    page_idx = ((virtual_address.to_i(16) / PAGE_SIZE) - first_pfn).to_i
     pageflags.each do |byte|
       total_pages += 1
-      active = (byte & (1 << 58) == 0) ? false : true
+      active = (byte & (1 << ACTIVE_BIT) == 0) ? false : true
       zero_mask = 1 << 57
-      zero_add = ((byte & zero_mask) == 0) ? 0 : 0x8000
-      #present = (byte & (1 << 63) == 0) ? false : true
-      present = (byte & (1 << 5) == 0) ? false : true
+      zero_add = ((byte & zero_mask) == 0) ? 0 : 0x80
+      present = (byte & (1 << PRESENT_BIT) == 0) ? false : true
+      swapped = (byte & (1 << SWAPPED_BIT) == 0) ? false : true
       zero_pages += 1 if zero_add != 0
+
       if present
         mapped_pages += 1
         if active
-          pixels[(3 * page_idx) + 0 ] = 0x7FFF + zero_add
+          pixels[(3 * page_idx) + 0 ] = 0x7F + zero_add
           pixels[(3 * page_idx) + 1 ] = 0
           pixels[(3 * page_idx) + 2 ] = 0
           active_pages += 1
         else
           pixels[(3 * page_idx) + 0 ] = 0
-          pixels[(3 * page_idx) + 1 ] = 0x7FFF + zero_add
+          pixels[(3 * page_idx) + 1 ] = 0x7F + zero_add
           pixels[(3 * page_idx) + 2 ] = 0
         end
+      elsif swapped
+          pixels[(3 * page_idx) + 0 ] = 0x60
+          pixels[(3 * page_idx) + 1 ] = 0x60
+          pixels[(3 * page_idx) + 2 ] = 0x60
       else
         pixels[(3 * page_idx) + 0 ] = 0
         pixels[(3 * page_idx) + 1 ] = 0
@@ -82,7 +94,7 @@ pixels = Array.new(3 * image_size * image_size, 0)
   image = Magick::Image.new(image_size, image_size) { self.background_color = "black" }
   puts("Image size: #{image_size}")
   puts("Pixel size: #{pixels.length}")
-  image.import_pixels(0, 0, image_size, image_size, "RGB", pixels)
+  image.import_pixels(0, 0, image_size, image_size, "RGB", pixels.pack("C*"))
   image = image.extent(image_size, image_size + label_border)
   desc_txt = Magick::Draw.new
   image.annotate(desc_txt, 0, 0, 0, 0, "SPECjbb 1 core, 3100 MiB RAM, 2500 MiB heap") {
